@@ -1,0 +1,22 @@
+version: '3'
+
+name: "chatbot"
+
+services:
+  app:
+    image: "chatbot"
+    build: .
+    environment:
+      - DOCKER_HOST=0.0.0.0
+      - DOCKER_MONGO_CONN=mongodb://chatbot-mongo:27017
+    ports:
+      - "8110:8000"
+    depends_on:
+      - mongo
+    container_name: "chatbot"
+
+  mongo:
+    image: "mongo:latest"
+    ports:
+      - "27117:27017"
+    container_name: "chatbot-mongo"

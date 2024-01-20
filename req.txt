@@ -1,0 +1,7 @@
+langchain
+gpt4all
+chromadb
+fastapi
+langchain-google-genai
+pillow
+pymongo
