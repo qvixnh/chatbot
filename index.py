@@ -1,12 +1,11 @@
 import time, os
-from fastapi import FastAPI
 from data_type.conversation_request import ConvesationRequest
-from langchain_community.utilities.searchapi import SearchApiAPIWrapper
 from embedding.embedding import LangChainEmbedding
 from infrastructure.defination import LangChainDefination, ModelType
 from langchain.memory import MongoDBChatMessageHistory, ConversationBufferMemory
 from config.constants import *
 from tools.tool import *
+from app import app
 
 if "GOOGLE_API_KEY" not in os.environ:
     os.environ["GOOGLE_API_KEY"] = "AIzaSyBTiUCRKEn7jPQqTn2Ok1jWTCXhjMEiHT0"
@@ -27,12 +26,6 @@ llm_chain_detect = defination.llm_chain(prompt=defination.prompt(DETECT_ENTITY_T
 llm_chain_rewrite = defination.llm_chain(prompt=defination.prompt(REWRITE_TEMPLATE),llm=llm)
 
 embedding.load_document(EMBEDDING_DOCUMENT_PATH,EMBEDDING_STORED_PATH)
-
-app = FastAPI(
-  title="LangChain Server",
-  version="1.0",
-  description="A simple api server using Langchain's Runnable interfaces",
-)
 
 @app.post("/completion")
 async def completion(req: ConvesationRequest):
@@ -88,5 +81,4 @@ async def completion(req: ConvesationRequest):
 if __name__ == "__main__":
     
     import uvicorn
-
     uvicorn.run(app, host=HOST, port=8000)
