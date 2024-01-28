@@ -1,12 +1,18 @@
 import time, os
 from fastapi import FastAPI
-from data_type.conversation_request import ConvesationRequest
+from data_type.conversation_request import ConvesationRequest, ConvesationLikeRequest,ConvesationRequestInput
 from langchain_community.utilities.searchapi import SearchApiAPIWrapper
 from embedding.embedding import LangChainEmbedding
 from infrastructure.defination import LangChainDefination, ModelType
 from langchain.memory import MongoDBChatMessageHistory, ConversationBufferMemory
 from config.constants import *
 from tools.tool import *
+
+from fastapi.responses import JSONResponse
+from motor.motor_asyncio import AsyncIOMotorClient
+from bson import ObjectId
+import json
+from datetime import datetime, timedelta,date
 
 if "GOOGLE_API_KEY" not in os.environ:
     os.environ["GOOGLE_API_KEY"] = "AIzaSyBTiUCRKEn7jPQqTn2Ok1jWTCXhjMEiHT0"
@@ -33,6 +39,78 @@ app = FastAPI(
   version="1.0",
   description="A simple api server using Langchain's Runnable interfaces",
 )
+
+# MongoDB configuration
+MONGODB_URL = "mongodb://localhost:27017"
+DATABASE_NAME = "chat_history"
+COLLECTION_NAME = "message_store"
+NEW_COLLECTION_NAME = "new_message_store"
+
+# Connect to MongoDB
+client = AsyncIOMotorClient(MONGODB_URL)
+database = client[DATABASE_NAME]
+collection = database[COLLECTION_NAME]
+new_collection = database[NEW_COLLECTION_NAME]
+
+# Custom JSON Encoder
+class CustomEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        if isinstance(obj, ObjectId):
+            return str(obj)
+        return json.JSONEncoder.default(self, obj)
+@app.post("/likeChatSession")
+async def likeChatSession(req: ConvesationLikeRequest):
+    session_id  = req.sessionId
+    is_liked = req.isLiked
+
+    # Kiểm tra xem đã tồn tại một bản ghi với session_id và is_liked=True hay không
+    existing_message = await new_collection.find_one({"session_id": session_id, "isLiked": True})
+
+    if existing_message:
+        # Nếu đã tồn tại, chỉ cần update, không cần thêm
+        await new_collection.update_one(
+            {"session_id": session_id, "isLiked": True},
+            {"$set": {"isLiked": is_liked}}
+        )
+        return JSONResponse(content={"message": "isLiked updated"}, status_code=200)
+    else:
+        # Nếu không có, thêm một bản ghi mới
+        current_date = datetime.utcnow()
+        new_message = {"session_id": session_id, "isLiked": is_liked, "date": current_date}
+        
+        # Insert document into the new collection
+        result = await new_collection.insert_one(new_message)
+
+        if result.inserted_id:
+            return JSONResponse(content={"message": "Message added successfully"}, status_code=200)
+        else:
+            raise HTTPException(status_code=500, detail="Failed to add message")
+
+
+@app.get("/get_messages/{session_id}")
+async def get_messages(session_id: str):
+    # Query MongoDB for messages with the specified session_id
+    messages = await collection.find({"SessionId": session_id}).to_list(length=None)
+    if not messages:
+        raise HTTPException(status_code=404, detail="No messages found for the given session_id")
+    # Serialize messages using the custom JSON encoder
+    serialized_messages = json.dumps(messages, cls=CustomEncoder)
+
+    return JSONResponse(content=json.loads(serialized_messages), status_code=200)
+
+@app.get("/get_recent_sessions/{days}")
+async def get_recent_sessions(dayLimit:int):
+    # Tính ngày 7 ngày trước
+    seven_days_ago = datetime.utcnow() - timedelta(days=dayLimit)
+    # Truy vấn các session được tạo trong khoảng thời gian 7 ngày trước
+    recent_sessions = await new_collection.find({"date": {"$gte": seven_days_ago}}).to_list(length=None)
+    if not recent_sessions:
+        raise HTTPException(status_code=404, detail="No recent sessions found")
+    # Serialize sessions using the custom JSON encoder
+    serialized_sessions = json.dumps(recent_sessions, cls=CustomEncoder)
+    return JSONResponse(content=json.loads(serialized_sessions), status_code=200)
 
 @app.post("/completion")
 async def completion(req: ConvesationRequest):
@@ -76,6 +154,14 @@ async def completion(req: ConvesationRequest):
             result = conversation({"user_input": text})
             end = time.perf_counter()
             print(f"Time elapsed: {end - start:.2f} seconds")
+            existing_message = await new_collection.find_one({"session_id": req.sessionId})
+            
+            if existing_message is None:
+                current_date = datetime.utcnow()
+                new_message = {"session_id": str(req.sessionId), "isLiked": False, "date": current_date}
+                await new_collection.insert_one(new_message)
+                print(f"New message inserted: {new_message}")
+
             return {
                 "response" : {
                     "text": result["text"]
@@ -83,8 +169,6 @@ async def completion(req: ConvesationRequest):
                 "type": "This result from conversation",
                 "sessionId": req.sessionId
             }
-
-
 if __name__ == "__main__":
     
     import uvicorn
